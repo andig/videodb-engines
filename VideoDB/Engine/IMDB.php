@@ -3,6 +3,7 @@
 namespace VideoDB\Engine;
 
 use VideoDB\Html\HtmlParser;
+use VideoDB\Html\Encoding;
 
 class IMDB extends AbstractEngine
 {
@@ -231,7 +232,7 @@ class IMDB extends AbstractEngine
             //Replace HTML " with "
             // $data['plot'] = preg_replace('/&#34;/', '"', $data['plot']);
             $data['plot'] = preg_replace('/\s+/s', ' ', $data['plot']);
-            // $data['plot'] = html_clean($data['plot']);
+            $data['plot'] = Encoding::html_clean($data['plot']);
         }
 
         // for Episodes - try to get some missing stuff from the main series page
