@@ -44,7 +44,7 @@ class HtmlParser
         $reg_attr2 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*"([^"]+)"\s*\]/i';
         $reg_attr3 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*\'([^\']+)\'\s*\]/i';
         $reg_attr4 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*([^\]]+)\s*\]/i';
-        $reg_pseudo = '/^:([a-z_-]+)(\([a-z_-]+\))?/i';
+        $reg_pseudo = '/^:([a-z_-]+)(\(([a-z_-]+)\))?/i';
         $reg_combinator = '/^(\s*[>+\s])?/i';
         $reg_comma = '/^\s*,/i';
 
@@ -107,6 +107,10 @@ class HtmlParser
             // Skip over pseudo-classes and pseudo-elements, which are of no use to us
             preg_match($reg_pseudo, $rule, $m);
             while ($m) {
+                // support jQuery 'contains' pseudo
+                if ($m[1] == 'contains') {
+                    $parts[] = "[contains(text(), '" . $m[3] . "')]";
+                }
                 $rule = substr($rule, strlen($m[0]));
                 preg_match($reg_pseudo, $rule, $m);
             }
