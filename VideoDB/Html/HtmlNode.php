@@ -47,14 +47,6 @@ class HtmlNode
         return $this->xpath($xpath, $idx);
     }
 
-    // // original code
-    // public function find($query, $idx = null)
-    // {
-    //     $xpath = HtmlParser::css_to_xpath($query);
-
-    //     return $this->xpath($xpath, $idx);
-    // }
-
     // finds nodes by xpath expression.
     public function xpath($xpath, $idx = null)
     {

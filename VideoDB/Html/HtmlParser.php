@@ -44,12 +44,12 @@ class HtmlParser
         $reg_attr2 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*"([^"]+)"\s*\]/i';
         $reg_attr3 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*\'([^\']+)\'\s*\]/i';
         $reg_attr4 = '/^\[\s*([^~=\s]+)\s*(~?=)\s*([^\]]+)\s*\]/i';
-        $reg_pseudo = '/^:([a-z_-])+/i';
+        $reg_pseudo = '/^:([a-z_-]+)(\([a-z_-]+\))?/i';
         $reg_combinator = '/^(\s*[>+\s])?/i';
         $reg_comma = '/^\s*,/i';
 
         $index = 1;
-        $parts = array("//", "*");
+        $parts = array(".//", "*");
         $last_rule = null;
 
         while ($rule && $rule !== $last_rule) {
@@ -130,9 +130,9 @@ class HtmlParser
             preg_match($reg_comma, $rule, $m);
             if ($m) {
                 $parts[] = " | ";
-                $parts[] = "//";
-                $parts[] = "*";
+                $parts[] = ".//";
                 $index = count($parts) - 1;
+                $parts[] = "*";
                 $rule = substr($rule, strlen($m[0]));
             }
         }
