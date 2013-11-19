@@ -2,7 +2,7 @@
 
 namespace VideoDB\Engine;
 
-use VideoDB\Html\HtmlParser;
+use VideoDB\Html\Parser\HtmlParser;
 use VideoDB\Html\Encoding;
 
 class IMDB extends AbstractEngine
@@ -12,47 +12,24 @@ class IMDB extends AbstractEngine
     private function fetchAndParse($url)
     {
         $body = $this->httpClient->get($url);
+        $body = preg_replace('#<\s*head.*/head\s*>#si', '', $body); // fix messy header
         $this->parser = HtmlParser::from_string($body);
         return $body;
     }
 
-    private function addArray($q, $parser = null)
+    private function matchList($selector, $parser = null)
     {
         $res = array();
         $parser = ($parser) ?: $this->parser;
-        foreach ($parser->find($q) as $r) {
+        foreach ($parser->find($selector) as $r) {
             $res[] = trim($r->text);
         }
         return $res;
     }
 
-    private function addArrayString($q, $parser = null)
+    private function matchListAsString($selector, $parser = null)
     {
-        return join(', ', $this->addArray($q, $parser));
-    }
-
-    // @todo fix searching from node
-    private function matchDetailString($sectionSelector, $match, $childSelector)
-    {
-        foreach ($this->parser->find($sectionSelector . ' h4') as $r) {
-            if (preg_match('/' . $match . '/', $r->text)) {
-                $parser = HtmlParser::from_string($r->parent()->html);
-                return $this->addArrayString($childSelector, $parser);
-            }
-        }
-        return null;
-    }
-
-    // @todo fix searching from node
-    private function matchDetailArray($sectionSelector, $match, $childSelector)
-    {
-        foreach ($this->parser->find($sectionSelector . ' h4') as $r) {
-            if (preg_match('/' . $match . '/', $r->text)) {
-                $parser = HtmlParser::from_string($r->parent()->html);
-                return $this->addArray($childSelector, $parser);
-            }
-        }
-        return null;
+        return join(', ', $this->matchList($selector, $parser));
     }
 
     public function getSearchUrl($q)
@@ -175,29 +152,25 @@ class IMDB extends AbstractEngine
         }
 
         // Runtime
-        $data['runtime'] = preg_replace('/\s*min/', '', $this->matchDetailString('#titleDetails', 'Runtime', 'time'));
+        $data['runtime'] = preg_replace('/\s*min/', '', $this->parser->find('#titleDetails h4:contains(Runtime) + time', 0)->text);
 
         // Director
-        $data['director'] = $this->addArrayString('div[itemprop=director] span');
+        $data['director'] = $this->matchListAsString('div[itemprop=director] span');
 
         // Rating
-        $data['rating'] = $this->addArrayString('span[itemprop=ratingValue]');
+        $data['rating'] = $this->parser->find('span[itemprop=ratingValue]', 0)->text;
 
         // Countries
-        $data['country'] = $this->matchDetailString('#titleDetails', 'Country', 'a');
+        $data['country'] = $this->matchListAsString('#titleDetails h4:contains(Country) + a');
 
         // Languages
-        $data['language'] = $this->matchDetailString('#titleDetails', 'Language', 'a');
+        $data['language'] = $this->matchListAsString('#titleDetails h4:contains(Language) + a');
 
         // Genres (as Array)
-        $data['genres'] = $this->matchDetailArray('#titleStoryLine', 'Genre', 'a');
+        $data['genres'] = $this->matchListAsString('#titleStoryLine h4:contains(Genre) + a');
 
         // Plot
-        if ($n = $this->parser->find('div[itemprop=description]', 0)) {
-            $data['plot'] = $n->text;
-        } else {
-            $data['plot'] = false;
-        }
+        $data['plot'] = $this->parser->find('div[itemprop=description]', 0)->text;
 
         // Fetch credits
         $url = $this->getDataUrl($id) . 'fullcredits';

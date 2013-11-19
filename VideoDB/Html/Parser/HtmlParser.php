@@ -1,6 +1,6 @@
 <?php
 
-namespace VideoDB\Html;
+namespace VideoDB\Html\Parser;
 
 /**
  * Author: Hitesh Kumar, IIT Delhi.

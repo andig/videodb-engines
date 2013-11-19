@@ -1,8 +1,8 @@
 <?php
 
-namespace VideoDB\Engine;
+namespace VideoDB\Html;
 
-static class Encoding
+class Encoding
 {
     protected $httpClient;
 
