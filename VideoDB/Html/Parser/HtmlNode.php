@@ -56,16 +56,12 @@ class HtmlNode
                 return array();
             }
             return self::wrap_nodes($result, $this->dom_xpath);
-        } elseif ($idx >= 0) {
-            if (!$result) {
-                return null;
-            }
-            return self::wrap_node($result->item($idx), $this->dom_xpath);
         } else {
             if (!$result) {
                 return null;
             }
-            return self::wrap_node($result->item($result->length + $idx), $this->dom_xpath);
+            $item = $result->item(($idx >= 0) ? $idx : $result->length + $idx);
+            return self::wrap_node($item, $this->dom_xpath);
         }
     }
 

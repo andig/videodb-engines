@@ -107,9 +107,16 @@ class HtmlParser
             // Skip over pseudo-classes and pseudo-elements, which are of no use to us
             preg_match($reg_pseudo, $rule, $m);
             while ($m) {
-                // support jQuery 'contains' pseudo
-                if ($m[1] == 'contains') {
-                    $parts[] = "[contains(text(), '" . $m[3] . "')]";
+                switch ($m[1]) {
+                    // support jQuery 'contains' pseudo
+                    case 'contains':
+                        $parts[] = "[contains(text(), '" . $m[3] . "')]";
+                        break;
+                    // CSS4 ! parent selector
+                    case 'parent':
+                        $parts[] = "/";
+                        $parts[] = "..";
+                        break;
                 }
                 $rule = substr($rule, strlen($m[0]));
                 preg_match($reg_pseudo, $rule, $m);

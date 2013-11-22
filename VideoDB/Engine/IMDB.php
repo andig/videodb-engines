@@ -9,12 +9,35 @@ class IMDB extends AbstractEngine
 {
     public $serverUrl = 'http://www.imdb.com';
 
-    private function fetchAndParse($url)
+    protected $parser;
+
+    protected function fetchAndParse($url)
     {
-        $body = $this->httpClient->get($url);
-        $body = preg_replace('#<\s*head.*/head\s*>#si', '', $body); // fix messy header
-        $this->parser = HtmlParser::from_string($body);
-        return $body;
+        $response = parent::fetch($url);
+// echo($url.": ".((empty($response)) ? '<empty>' : '<set>')."\n");
+        if ($response) {
+            $response = preg_replace('#<head.*?/head>#si', '', $response); // fix messy header
+// echo("resp: ".((empty($response)) ? '<empty>' : '<set>')."\n");
+            $this->parser = HtmlParser::from_string($response);
+        }
+        return $response;
+    }
+
+    /**
+     * Return parser node attributes gracefully handling missing match
+     */
+    private function match($selector, $attr = 'text', $parser = null)
+    {
+        $parser = ($parser) ?: $this->parser;
+        if ($n = $parser->find($selector, 0)) {
+            return trim($n->$attr);
+        }
+        return null;
+    }
+
+    private function matchText($selector, $parser = null)
+    {
+        return $this->match($selector, 'text', $parser);
     }
 
     private function matchList($selector, $parser = null)
@@ -32,9 +55,16 @@ class IMDB extends AbstractEngine
         return join(', ', $this->matchList($selector, $parser));
     }
 
+    private function matchTitle($str, &$data)
+    {
+        $list             = explode(' - ', trim($str), 2);
+        $data['title']    = trim($list[0]);
+        $data['subtitle'] = (isset($list[1])) ? trim($list[1]) : false;
+    }
+
     public function getSearchUrl($q)
     {
-        $url = $this->serverUrl.'/find?s=all&amp&q='.urlencode($q);
+        $url = $this->serverUrl . '/find?s=all&amp&q='.urlencode($q);
         if (isset($this->searchParameter['aka'])) {
             $url .= ';s=tt;site=aka';
         }
@@ -44,51 +74,38 @@ class IMDB extends AbstractEngine
 
     public function search($q)
     {
+        $url = $this->getSearchUrl($q);
+        if (($body = $this->fetchAndParse($url)) === false) {
+            return false;
+        }
+
         $data = array();
 
-        $url = $this->getSearchUrl($q);
-        $body = $this->httpClient->get($url);
-        // if (!$resp['success']) $CLIENTERROR .= $resp['error']."\n";
-// echo($body);die;
-
         // match type
-        if (preg_match(
-            '/^'.preg_quote($this->serverUrl,'/').'\/[Tt]itle(\?|\/tt)([0-9?]+)\/?/',
-            $this->httpClient->getEffectiveUrl(),
-            $single)
-        ) {
+        if (preg_match('/^'.preg_quote($this->serverUrl, '/') . '\/[Tt]itle(\?|\/tt)([0-9?]+)\/?/', $this->httpClient->getEffectiveUrl(), $ary)) {
             // direct match (redirecting to individual title)
-            $info       = array();
-            $info['id'] = $single[2];
+            $info = array();
+            $info['id'] = $ary[2];
 
             // Title
             if (preg_match('/<title>(.*?) \([1-2][0-9][0-9][0-9].*?\)<\/title>/i', $body, $m)) {
-                list($t, $s)        = explode(' - ', trim($m[1]), 2);
-                $info['title']      = trim($t);
-                $info['subtitle']   = trim($s);
+                $this->matchTitle($m[1], $info);
             }
-
-            $data[]     = $info;
-        } elseif (preg_match_all(
-            '/<tr class="findResult.*?">(.*?)<\/tr>/i',
-            $body,
-            $multi,
-            PREG_SET_ORDER)
-        ) {
+            $data[] = $info;
+        } else {
             // multiple matches
-            foreach ($multi as $row) {
-                if (preg_match('/<td class="result_text">\s*<a href="\/title\/tt(\d+).*?" >(.*?)<\/a>\s?\(?(\d+)?\)?/i', $row[1], $ary)) {
+            foreach ($this->parser->find('tr.findResult td.result_text') as $n) {
+                if (preg_match('/<a href="\/title\/tt(\d+).*?" >(.*?)<\/a>\s?\(?(\d+)?\)?/i', $n->html, $ary)) {
                     if (count($ary) > 2) {
-                        $info           = array();
-                        $info['id']     = $ary[1];
+                        $info = array();
+                        $info['id'] = $ary[1];
                         $info['title']  = $ary[2];
                         if (count($ary) > 3) {
                             $info['year']   = $ary[3];
                         }
-                        $data[]         = $info;
+                        $data[] = $info;
                     }
                 }
-    #           dump($info);
             }
         }
 
@@ -98,67 +115,64 @@ class IMDB extends AbstractEngine
     public function getDataUrl($id)
     {
         // added trailing / to avoid redirect
-        return $this->serverUrl.'/title/tt'.$id.'/';
+        return $this->serverUrl . '/title/tt'.$id.'/';
     }
 
     public function getData($id)
     {
-        $data= array(); // result
-        $ary = array(); // temp
-
-        // fetch mainpage
         $url = $this->getDataUrl($id);
-        $body = $this->fetchAndParse($url);
+        if (($body = $this->fetchAndParse($url)) === false) {
+            return false;
+        }
+
+        $data = array();
 
         // Check if it is a TV series episode
         if ($a = $this->parser->find('a[title~=episode]', 0)) {
             $data['istv'] = 1;
+            $data['tvseries_id'] = false;
             if (preg_match('/title\/tt(\d+)\/episodes/i', $a->href, $ary)) {
-                $data['tvseries_id'] = trim($ary[1]);
+                $data['tvseries_id'] = $ary[1];
             }
         } else {
             $data['istv'] = false;
+            $data['tvseries_id'] = false;
         }
 
         // Title
         if ($n = $this->parser->find('h1 span[itemprop=name]', 0)) {
-            if (count($l = explode(' - ', $n->text, 2))) {
-                $data['title'] = trim($l[0]);
-                $data['subtitle'] = (isset($l[1])) ? trim($l[1]) : '';
-            } else {
-                $data['title'] = $n->text;
-                $data['subtitle'] = false;
-            }
+            $this->matchTitle($n->text, $data);
         }
 
         // Year
-        if ($n = $this->parser->find('h1 span.nobr', 0)) {
-            if (preg_match('/(\d\d\d\d)\)/si', $n->text, $ary)) {
-                $data['year'] = $ary[1];
-            }
+        if (preg_match('/(\d\d\d\d)\)/si', $this->parser->find('h1 span.nobr', 0)->text, $ary)) {
+            $data['year'] = $ary[1];
+        } else {
+            $data['year'] = false;
         }
 
         // Original title
-        if (preg_match('/<span class="title-extra".+?>\s*"?(.*?)"?\s*<i>\(original title\)<\/i>\s*</si', $body, $ary)) {
+        if (preg_match('/\s*"?(.*?)"?\s*<i>\(original title\)<\/i>/si', $this->matchText('span.title-extra'), $ary)) {
             $data['origtitle'] = trim($ary[1]);
+        } else {
+            $data['origtitle'] = false;
         }
 
-        // Cover URL
-        $data['coverurl'] = $this->matchCoverURL($body);
-
-        // MPAA Rating
-        if (preg_match('/<span\s?itemprop="contentRating">(.*?)</is', $body, $ary)) {
-            $data['mpaa'] = trim($ary[1]);
-        }
+        // // MPAA Rating
+        // if ($n = $this->parser->find('span[itemprop=contentRating]', 0)) {
+        //     $data['mpaa'] = $n->title;
+        // } else {
+        //     $data['mpaa'] = false;
+        // }
 
         // Runtime
-        $data['runtime'] = preg_replace('/\s*min/', '', $this->parser->find('#titleDetails h4:contains(Runtime) + time', 0)->text);
+        $data['runtime'] = preg_replace('/\s*min/', '', $this->matchText('#titleDetails h4:contains(Runtime) + time'));
 
         // Director
         $data['director'] = $this->matchListAsString('div[itemprop=director] span');
 
         // Rating
-        $data['rating'] = $this->parser->find('span[itemprop=ratingValue]', 0)->text;
+        $data['rating'] = $this->matchText('span[itemprop=ratingValue]');
 
         // Countries
         $data['country'] = $this->matchListAsString('#titleDetails h4:contains(Country) + a');
@@ -170,11 +184,13 @@ class IMDB extends AbstractEngine
         $data['genres'] = $this->matchListAsString('#titleStoryLine h4:contains(Genre) + a');
 
         // Plot
-        $data['plot'] = $this->parser->find('div[itemprop=description]', 0)->text;
+        $data['plot'] = $this->matchText('div[itemprop=description]');
 
-        // Fetch credits
-        $url = $this->getDataUrl($id) . 'fullcredits';
-        $body = $this->fetchAndParse($url);
+        // Cover URL
+        $data['coverurl'] = $this->matchCoverURL();
+
+        // Credits
+        $body = $this->fetchAndParse($this->getDataUrl($id) . 'fullcredits');
 
         // Cast
         $cast = '';
@@ -187,93 +203,87 @@ class IMDB extends AbstractEngine
                     $cast      .= "$actor::$character::$actorid\n";
                 }
             }
-            // $data['cast'] = html_clean_utf8($cast);
 
-            // sometimes appearing in series (e.g. Scrubs)
+            // cleanup
+            $cast = Encoding::html_clean($cast);
             $data['cast'] = preg_replace('#/ ... #', '', $cast);
         }
         $data['cast'] = $cast;
 
-        // Fetch plot
-        $url = $this->getDataUrl($id) . 'plotsummary';
-        $body = $this->fetchAndParse($url);
-
         // Plot
         // @todo support multiple
-        if ($n = $this->parser->find('p.plotSummary', 0)) {
-            $data['plot'] = $n->text;
-            //Replace HTML " with "
-            // $data['plot'] = preg_replace('/&#34;/', '"', $data['plot']);
-            $data['plot'] = preg_replace('/\s+/s', ' ', $data['plot']);
-            $data['plot'] = Encoding::html_clean($data['plot']);
-        }
+        $body = $this->fetchAndParse($this->getDataUrl($id) . 'plotsummary');
+        $data['plot'] = $this->matchText('p.plotSummary');
+        $data['plot'] = Encoding::html_clean($data['plot']);
+
+        // MPAA Rating
+        $body = $this->fetchAndParse($this->getDataUrl($id) . 'parentalguide');
+        $data['mpaa'] = $this->matchText('h5>a:contains(MPAA):parent + div.info-content');
+        // if ($n = $this->parser->find('h5 a:contains(MPAA)', 0)) {
+        //     $data['mpaa'] = $this->matchText('div.info-content', $n->parent()->parent());
+        // } else {
+        //     $data['mpaa'] = false;
+        // }
 
         // for Episodes - try to get some missing stuff from the main series page
-        if ($data['istv'] && (!$data['runtime'] or !$data['country'] or !$data['language'] or !$data['coverurl'])) {
-            $body = $this->httpClient->get($this->serverUrl.'/title/tt'.$data['tvseries_id'].'/');
-            $this->parser = HtmlParser::from_string($body);
-            // if (!$resp['success']) $CLIENTERROR .= $resp['error']."\n";
+        if ($data['istv'] && $data['tvseries_id']) {
+            $body = $this->fetchAndParse($this->getDataUrl($data['tvseries_id']));
 
-            # runtime
             if (!$data['runtime']) {
-                preg_match('/itemprop="duration".*?>(\d+)\s+min<\//si', $body, $ary);
-                if (!$ary) {
-                    preg_match('/Runtime:?<\/h4>.*?>(\d+)\s+min/si', $body, $ary);
-                }
-                $data['runtime']  = preg_replace('/,/', '', trim($ary[1]));
+                $data['runtime'] = preg_replace('/\s*min/', '', $this->parser->find('#titleDetails h4:contains(Runtime) + time', 0)->text);
             }
 
-            # country
+            if (!$data['director']) {
+                $data['director'] = $this->matchListAsString('div[itemprop=director] span');
+            }
+
+            if (!$data['rating']) {
+                $data['rating'] = $this->parser->find('span[itemprop=ratingValue]', 0)->text;
+            }
+
             if (!$data['country']) {
-                preg_match('/Country:\s*<\/h4>(.+?)<\/div>/si', $body, $ary);
-                if (preg_match_all('/<a.*?href="\/country\/.+?".*?>(.+?)<\/a>/si', $ary[1], $ary, PREG_PATTERN_ORDER)) {
-                    $data['country'] = trim(join(', ', $ary[1]));
-                }
+                $data['country'] = $this->matchListAsString('#titleDetails h4:contains(Country) + a');
             }
 
-            # language
             if (!$data['language']) {
-                preg_match('/Languages?:\s*<\/h4>(.+?)<\/div>/si', $body, $ary);
-                if (preg_match_all('/<a.*?href="\/language\/.+?".*?>(.+?)<\/a>/si', $ary[1], $ary, PREG_PATTERN_ORDER)) {
-                    $data['language'] = trim(strtolower(join(', ', $ary[1])));
-                }
+                $data['language'] = $this->matchListAsString('#titleDetails h4:contains(Language) + a');
             }
 
-            # cover
             if (!$data['coverurl']) {
-                $data['coverurl'] = $this->matchCoverURL($body);
+                $data['coverurl'] = $this->matchCoverURL();
             }
         }
 
         return $data;
     }
 
-    public function matchCoverURL($body)
+    /**
+     * @todo  fix modifying parser
+     */
+    public function matchCoverURL()
     {
         $url = false;
 
-        // embedded img
         if ($n = $this->parser->find('#img_primary img', 0)) {
+            // embedded img
             $url = $this->serverUrl . $n->src;
-        }
-        // full-size img
-        if ($n = $this->parser->find('#img_primary a', 0)) {
-            $body = $this->httpClient->get($this->serverUrl . $n->href);
-            $parser = HtmlParser::from_string($body);
 
-            if ($n = $parser->find('#primary-img', 0)) {
-                $url = $this->serverUrl . $n->src;
+            // full-size img
+            if ($this->fetchAndParse($this->serverUrl . $this->parser->find('#img_primary a', 0)->href)) {
+                if ($n = $this->parser->find('#primary-img', 0)) {
+                    $url = $this->serverUrl . $n->src;
+                }
             }
         }
 
         return $url;
     }
 
-    public function imdbActorUrl($name, $id)
+    public function getActorUrl($name, $id = null)
     {
-        $path = ($id) ? 'name/'.urlencode($id).'/' : 'Name?'.urlencode(html_entity_decode_all($name));
+        $path = ($id) ? 'name/' . urlencode($id) . '/' : 'Name?' . urlencode(Encoding::html_entity_decode_all($name, true));
 
-        return $this->serverUrl.'/'.$path;
+        return $this->serverUrl . '/' . $path;
     }
 
     /**
@@ -286,32 +296,35 @@ class IMDB extends AbstractEngine
      * @param  string $name Name of the Actor
      * @return array  array with Actor-URL and Thumbnail
      */
-    public function imdbActor($name, $actorid)
+    public function searchActor($name, $id = null)
     {
         // search directly by id or via name?
-        $resp   = $this->httpClient->get(imdbActorUrl($name, $actorid));
+        $url = $this->getActorUrl($name, $id);
+        if (($body = $this->fetchAndParse($url)) === false) {
+            return false;
+        }
 
-        $ary    = array();
+        $data = array();
 
         // if not direct match load best match
         if (preg_match('#<b>Popular Names</b>.+?<a\s+href="(.*?)">#i', $body, $m) ||
             preg_match('#<b>Names \(Exact Matches\)</b>.+?<a\s+href="(.*?)">#i', $body, $m) ||
             preg_match('#<b>Names \(Approx Matches\)</b>.+?<a\s+href="(.*?)">#i', $body, $m))
         {
-            if (!preg_match('/http/i', $m[1])) $m[1] = $this->serverUrl.$m[1];
-            $resp = $this->httpClient->get($m[1], true);
+            if (!preg_match('/http/i', $m[1])) $m[1] = $this->serverUrl . $m[1];
+            $body = $this->fetchAndParse($m[1]);
         }
-
-        // now we should have loaded the best match
 
         // only search in img_primary <td> - or we get far to many useless images
-        if (preg_match('/<td.*?id="img_primary".*?>(.*?)<\/td>/si',$body, $match)) {
-            if (preg_match('/.*?<a.*?href="(.+?)"\s*?>\s*<img\s+.*?src="(.*?)"/si', $match[1], $m)) {
-                $ary[0][0] = $m[1];
-                $ary[0][1] = $m[2];
-            }
+        if ($n = $this->parser->find('#img_primary', 0)) {
+            $data[] = array(
+                $this->match('a', 'href', $n),
+                $this->match('img', 'src', $n)
+                // $n->find('a', 0)->href,
+                // $n->find('img', 0)->src
+            );
         }
 
-        return $ary;
+        return $data;
     }
 }

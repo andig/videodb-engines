@@ -4,6 +4,8 @@ namespace VideoDB\Engine;
 
 interface EngineInterface
 {
+    public function getError();
+
     public function getServerUrl();
 
     public function getSearchUrl($q);
